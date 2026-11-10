@@ -96,21 +96,24 @@ impl Default for MacGrid {
     }
 }
 
+#[derive(Default)]
 struct Grid {
     grid_x: [[f32; HEIGHT]; WIDTH],
     grid_y: [[f32; HEIGHT]; WIDTH],
 }
 
-impl Default for Grid {
-    fn default() -> Self {
-        Self {
-            grid_x: Default::default(),
-            grid_y: Default::default(),
+fn calculate_divergence(divergence: &mut Grid, velocities: &MacGrid) {
+    for (y, row) in divergence.grid_x.iter_mut().enumerate() {
+        for (x, cell) in row.iter_mut().enumerate() {
+            *cell = velocities.grid_x[y][x + 1] - velocities.grid_x[y][x];
+        }
+    }
+    for (y, row) in divergence.grid_y.iter_mut().enumerate() {
+        for (x, cell) in row.iter_mut().enumerate() {
+            *cell = velocities.grid_y[y + 1][x] - velocities.grid_y[y][x];
         }
     }
 }
-
-fn calculate_divergence(divergence: &mut Grid, velocities: &MacGrid) {}
 
 #[macroquad::main(window_conf)]
 async fn main() {
