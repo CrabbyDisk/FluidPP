@@ -1,4 +1,6 @@
+use ::rand as random;
 use macroquad::prelude::*;
+use random::random;
 
 fn window_conf() -> Conf {
     use macroquad::miniquad;
@@ -85,6 +87,12 @@ impl MacGrid {
             top * y.fract() + btm * (1.0 - y.fract())
         }
     }
+    fn random() -> Self {
+        Self {
+            grid_x: random(),
+            grid_y: random(),
+        }
+    }
 }
 
 impl Default for MacGrid {
@@ -98,19 +106,61 @@ impl Default for MacGrid {
 
 #[derive(Default)]
 struct Grid {
-    grid_x: [[f32; HEIGHT]; WIDTH],
-    grid_y: [[f32; HEIGHT]; WIDTH],
+    grid: [[f32; WIDTH]; HEIGHT],
+}
+
+impl Grid {
+    fn draw(&self) {
+        for (y, row) in self.grid.iter().enumerate() {
+            for (x, cell) in row.iter().enumerate() {
+                let color = if *cell > 0.0 { BLUE } else { RED }.with_alpha(cell.abs() * 0.5);
+                draw_rectangle(x as f32 * 50.0, y as f32 * 50.0, 50.0, 50.0, color);
+            }
+        }
+    }
 }
 
 fn calculate_divergence(divergence: &mut Grid, velocities: &MacGrid) {
-    for (y, row) in divergence.grid_x.iter_mut().enumerate() {
+    for (y, row) in divergence.grid.iter_mut().enumerate() {
         for (x, cell) in row.iter_mut().enumerate() {
-            *cell = velocities.grid_x[y][x + 1] - velocities.grid_x[y][x];
+            *cell = velocities.grid_x[y][x + 1] + velocities.grid_y[y + 1][x]
+                - velocities.grid_x[y][x]
+                - velocities.grid_y[y][x];
         }
     }
-    for (y, row) in divergence.grid_y.iter_mut().enumerate() {
-        for (x, cell) in row.iter_mut().enumerate() {
-            *cell = velocities.grid_y[y + 1][x] - velocities.grid_y[y][x];
+}
+
+fn calculate_pressure(pressure: &mut Grid, divergence: &Grid) {
+    for y in 0..HEIGHT {
+        for x in 0..WIDTH {
+            let mut neighbours = 0;
+            let top = if y != 0 {
+                neighbours += 1;
+                pressure.grid[y - 1][x]
+            } else {
+                0.0
+            };
+
+            let btm = if y != HEIGHT - 1 {
+                neighbours += 1;
+                pressure.grid[y + 1][x]
+            } else {
+                0.0
+            };
+            let left = if x != 0 {
+                neighbours += 1;
+                pressure.grid[y][x - 1]
+            } else {
+                0.0
+            };
+            let right = if x != WIDTH - 1 {
+                neighbours += 1;
+                pressure.grid[y][x + 1]
+            } else {
+                0.0
+            };
+            pressure.grid[y][x] =
+                (top + btm + right + left) / neighbours as f32 - divergence.grid[y][x];
         }
     }
 }
@@ -119,15 +169,18 @@ fn calculate_divergence(divergence: &mut Grid, velocities: &MacGrid) {
 async fn main() {
     // The velocities are stored in a staggered (MAC) grid, which means that the velocity values are stored on cell boundaries and not on cell centers.
     // This means that there are (width + 1) * height horizontal components and width * (height + 1) vertical components.
-    let vel: MacGrid = Default::default();
+    let vel: MacGrid = MacGrid::random();
 
     // The pressures and divergences to correct are stored in a standard grid since it's more appropriate in this case
     let mut divergence: Grid = Default::default();
-    let pressure: Grid;
+    let mut pressure: Grid = Default::default();
     loop {
+        clear_background(WHITE);
         calculate_divergence(&mut divergence, &vel);
-        clear_background(RED);
-        draw_text("Initial project setup", 10.0, 500.0, 48.0, BLACK);
+        for _ in 0..50 {
+            calculate_pressure(&mut pressure, &divergence);
+        }
+        pressure.draw();
         next_frame().await;
     }
 }
