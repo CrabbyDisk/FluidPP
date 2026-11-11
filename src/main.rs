@@ -111,7 +111,7 @@ impl MacGrid {
                         y: y + 5.0,
                     },
                     Vec2 {
-                        x: x + cell * 25.0 + 7.0,
+                        x: x + cell * 25.0 + 7.0 * cell.signum(),
                         y,
                     },
                     if *cell > 0.0 { BLUE } else { RED },
@@ -140,7 +140,7 @@ impl MacGrid {
                         x: x + 5.0,
                     },
                     Vec2 {
-                        y: y + cell * 25.0 + 7.0,
+                        y: y + cell * 25.0 + 7.0 * cell.signum(),
                         x,
                     },
                     if *cell > 0.0 { BLUE } else { RED },
@@ -154,6 +154,13 @@ impl MacGrid {
             grid_x: random(),
             grid_y: random(),
         }
+    }
+
+    fn get_cell_mut(&mut self, x: f32, y: f32) -> (&mut f32, &mut f32) {
+        (
+            &mut self.grid_x[(y - 0.5).round() as usize][x.round() as usize],
+            &mut self.grid_y[y.round() as usize][(x - 0.5).round() as usize],
+        )
     }
 }
 
@@ -252,11 +259,18 @@ async fn main() {
     let mut divergence: Grid = Default::default();
     let mut pressure: Grid = Default::default();
     loop {
+        if is_mouse_button_down(MouseButton::Left) {
+            let (x, y) = mouse_position();
+            let Vec2 { x: dx, y: dy } = mouse_delta_position();
+            let (cell_x, cell_y) = vel.get_cell_mut(x / 50.0, y / 50.0);
+            *cell_x -= dx * 5.0;
+            *cell_y -= dy * 5.0;
+        }
         clear_background(WHITE);
         calculate_divergence(&mut divergence, &vel);
-        // for _ in 0..5 {
         // calculate_pressure(&mut pressure, &divergence);
-        if is_key_pressed(KeyCode::Space) {
+        // if is_key_down(KeyCode::Space) {
+        for _ in 0..50 {
             solve_velocities(&mut vel);
         }
         // }
