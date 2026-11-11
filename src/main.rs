@@ -87,6 +87,68 @@ impl MacGrid {
             top * y.fract() + btm * (1.0 - y.fract())
         }
     }
+
+    fn draw(&self) {
+        for (y, row) in self.grid_x.iter().enumerate() {
+            for (x, cell) in row.iter().enumerate() {
+                let x = x as f32 * 50.0;
+                let y = y as f32 * 50.0 + 25.0;
+                draw_line(
+                    x,
+                    y,
+                    x + cell * 25.0,
+                    y,
+                    2.0,
+                    if *cell > 0.0 { BLUE } else { RED },
+                );
+                draw_triangle(
+                    Vec2 {
+                        x: x + cell * 25.0,
+                        y: y - 5.0,
+                    },
+                    Vec2 {
+                        x: x + cell * 25.0,
+                        y: y + 5.0,
+                    },
+                    Vec2 {
+                        x: x + cell * 25.0 + 7.0,
+                        y,
+                    },
+                    if *cell > 0.0 { BLUE } else { RED },
+                );
+            }
+        }
+        for (y, row) in self.grid_y.iter().enumerate() {
+            for (x, cell) in row.iter().enumerate() {
+                let x = x as f32 * 50.0 + 25.0;
+                let y = y as f32 * 50.0;
+                draw_line(
+                    x,
+                    y,
+                    x,
+                    y + cell * 25.0,
+                    2.0,
+                    if *cell > 0.0 { BLUE } else { RED },
+                );
+                draw_triangle(
+                    Vec2 {
+                        y: y + cell * 25.0,
+                        x: x - 5.0,
+                    },
+                    Vec2 {
+                        y: y + cell * 25.0,
+                        x: x + 5.0,
+                    },
+                    Vec2 {
+                        y: y + cell * 25.0 + 7.0,
+                        x,
+                    },
+                    if *cell > 0.0 { BLUE } else { RED },
+                )
+            }
+        }
+    }
+
     fn random() -> Self {
         Self {
             grid_x: random(),
@@ -130,6 +192,7 @@ fn calculate_divergence(divergence: &mut Grid, velocities: &MacGrid) {
     }
 }
 
+// Doesn't work, I don't know why
 fn calculate_pressure(pressure: &mut Grid, divergence: &Grid) {
     for y in 0..HEIGHT {
         for x in 0..WIDTH {
@@ -160,7 +223,21 @@ fn calculate_pressure(pressure: &mut Grid, divergence: &Grid) {
                 0.0
             };
             pressure.grid[y][x] =
-                (top + btm + right + left) / neighbours as f32 - divergence.grid[y][x];
+                ((top + btm + right + left) / neighbours as f32) - divergence.grid[y][x];
+        }
+    }
+}
+
+// Attempt to solve directly without going through pressure
+fn solve_velocities(vel: &mut MacGrid) {
+    for y in 0..HEIGHT {
+        for x in 0..WIDTH {
+            let divergence =
+                vel.grid_x[y][x + 1] + vel.grid_y[y + 1][x] - vel.grid_x[y][x] - vel.grid_y[y][x];
+            vel.grid_x[y][x] += divergence / 4.0;
+            vel.grid_y[y][x] += divergence / 4.0;
+            vel.grid_x[y][x + 1] -= divergence / 4.0;
+            vel.grid_y[y + 1][x] -= divergence / 4.0;
         }
     }
 }
@@ -169,7 +246,7 @@ fn calculate_pressure(pressure: &mut Grid, divergence: &Grid) {
 async fn main() {
     // The velocities are stored in a staggered (MAC) grid, which means that the velocity values are stored on cell boundaries and not on cell centers.
     // This means that there are (width + 1) * height horizontal components and width * (height + 1) vertical components.
-    let vel: MacGrid = MacGrid::random();
+    let mut vel: MacGrid = MacGrid::random();
 
     // The pressures and divergences to correct are stored in a standard grid since it's more appropriate in this case
     let mut divergence: Grid = Default::default();
@@ -177,10 +254,14 @@ async fn main() {
     loop {
         clear_background(WHITE);
         calculate_divergence(&mut divergence, &vel);
-        for _ in 0..50 {
-            calculate_pressure(&mut pressure, &divergence);
+        // for _ in 0..5 {
+        // calculate_pressure(&mut pressure, &divergence);
+        if is_key_pressed(KeyCode::Space) {
+            solve_velocities(&mut vel);
         }
-        pressure.draw();
+        // }
+        divergence.draw();
+        vel.draw();
         next_frame().await;
     }
 }
