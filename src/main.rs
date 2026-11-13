@@ -149,13 +149,6 @@ impl MacGrid {
         }
     }
 
-    fn random() -> Self {
-        Self {
-            grid_x: random(),
-            grid_y: random(),
-        }
-    }
-
     fn get_cell_mut(&mut self, x: f32, y: f32) -> (&mut f32, &mut f32) {
         (
             &mut self.grid_x[(y - 0.5).round() as usize][x.round() as usize],
@@ -173,7 +166,7 @@ impl Default for MacGrid {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 struct Grid {
     grid: [[f32; WIDTH]; HEIGHT],
 }
@@ -182,7 +175,7 @@ impl Grid {
     fn draw(&self) {
         for (y, row) in self.grid.iter().enumerate() {
             for (x, cell) in row.iter().enumerate() {
-                let color = if *cell > 0.0 { BLUE } else { RED }.with_alpha(cell.abs() * 0.5);
+                let color = if *cell > 0.0 { BLUE } else { RED }.with_alpha(cell.abs());
                 draw_rectangle(x as f32 * 50.0, y as f32 * 50.0, 50.0, 50.0, color);
             }
         }
@@ -192,59 +185,66 @@ impl Grid {
 fn calculate_divergence(divergence: &mut Grid, velocities: &MacGrid) {
     for (y, row) in divergence.grid.iter_mut().enumerate() {
         for (x, cell) in row.iter_mut().enumerate() {
-            *cell = velocities.grid_x[y][x + 1] + velocities.grid_y[y + 1][x]
-                - velocities.grid_x[y][x]
-                - velocities.grid_y[y][x];
+            let left = velocities.grid_x[y][x];
+            let right = velocities.grid_x[y][x + 1];
+            let top = velocities.grid_y[y][x];
+            let btm = velocities.grid_y[y + 1][x];
+            *cell = right - left + btm - top;
         }
     }
 }
 
-// Doesn't work, I don't know why
 fn calculate_pressure(pressure: &mut Grid, divergence: &Grid) {
-    for y in 0..HEIGHT {
-        for x in 0..WIDTH {
-            let mut neighbours = 0;
-            let top = if y != 0 {
-                neighbours += 1;
-                pressure.grid[y - 1][x]
+    let old = *pressure;
+    for (y, row) in pressure.grid.iter_mut().enumerate() {
+        for (x, cell) in row.iter_mut().enumerate() {
+            let top = if y == 0 {
+                old.grid[y][x]
             } else {
-                0.0
+                old.grid[y - 1][x]
             };
 
-            let btm = if y != HEIGHT - 1 {
-                neighbours += 1;
-                pressure.grid[y + 1][x]
+            let btm = if y == HEIGHT - 1 {
+                old.grid[y][x]
             } else {
-                0.0
+                old.grid[y + 1][x]
             };
-            let left = if x != 0 {
-                neighbours += 1;
-                pressure.grid[y][x - 1]
+            let left = if x == 0 {
+                old.grid[y][x]
             } else {
-                0.0
+                old.grid[y][x - 1]
             };
-            let right = if x != WIDTH - 1 {
-                neighbours += 1;
-                pressure.grid[y][x + 1]
+            let right = if x == WIDTH - 1 {
+                old.grid[y][x]
             } else {
-                0.0
+                old.grid[y][x + 1]
             };
-            pressure.grid[y][x] =
-                ((top + btm + right + left) / neighbours as f32) - divergence.grid[y][x];
+            *cell = (top + btm + right + left - divergence.grid[y][x]) / 4.0;
         }
     }
 }
 
-// Attempt to solve directly without going through pressure
-fn solve_velocities(vel: &mut MacGrid) {
-    for y in 0..HEIGHT {
-        for x in 0..WIDTH {
-            let divergence =
-                vel.grid_x[y][x + 1] + vel.grid_y[y + 1][x] - vel.grid_x[y][x] - vel.grid_y[y][x];
-            vel.grid_x[y][x] += divergence / 4.0;
-            vel.grid_y[y][x] += divergence / 4.0;
-            vel.grid_x[y][x + 1] -= divergence / 4.0;
-            vel.grid_y[y + 1][x] -= divergence / 4.0;
+fn project(vel: &mut MacGrid, pressure: &Grid) {
+    for (y, row) in vel.grid_x.iter_mut().enumerate() {
+        for (x, cell) in row.iter_mut().enumerate() {
+            if x == 0 || x == WIDTH {
+                *cell = 0.0;
+            } else {
+                let left = pressure.grid[y][x - 1];
+                let right = pressure.grid[y][x];
+                *cell -= right - left;
+            }
+        }
+    }
+    for (y, row) in vel.grid_y.iter_mut().enumerate() {
+        for (x, cell) in row.iter_mut().enumerate() {
+            if y == 0 || y == HEIGHT {
+                *cell = 0.0;
+            } else {
+                let top = pressure.grid[y - 1][x];
+                let btm = pressure.grid[y][x];
+                *cell -= btm - top;
+            }
         }
     }
 }
@@ -253,7 +253,7 @@ fn solve_velocities(vel: &mut MacGrid) {
 async fn main() {
     // The velocities are stored in a staggered (MAC) grid, which means that the velocity values are stored on cell boundaries and not on cell centers.
     // This means that there are (width + 1) * height horizontal components and width * (height + 1) vertical components.
-    let mut vel: MacGrid = MacGrid::random();
+    let mut vel: MacGrid = MacGrid::default();
 
     // The pressures and divergences to correct are stored in a standard grid since it's more appropriate in this case
     let mut divergence: Grid = Default::default();
@@ -263,18 +263,16 @@ async fn main() {
             let (x, y) = mouse_position();
             let Vec2 { x: dx, y: dy } = mouse_delta_position();
             let (cell_x, cell_y) = vel.get_cell_mut(x / 50.0, y / 50.0);
-            *cell_x -= dx * 5.0;
-            *cell_y -= dy * 5.0;
+            *cell_x -= dx * 10.0;
+            *cell_y -= dy * 10.0;
         }
         clear_background(WHITE);
         calculate_divergence(&mut divergence, &vel);
-        // calculate_pressure(&mut pressure, &divergence);
-        // if is_key_down(KeyCode::Space) {
-        for _ in 0..50 {
-            solve_velocities(&mut vel);
+        for _ in 0..100 {
+            calculate_pressure(&mut pressure, &divergence);
         }
-        // }
-        divergence.draw();
+        project(&mut vel, &pressure);
+        pressure.draw();
         vel.draw();
         next_frame().await;
     }
