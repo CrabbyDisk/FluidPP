@@ -84,6 +84,32 @@ impl MacGrid {
     }
 
     fn draw(&self) {
+        for y in 0..HEIGHT {
+            for x in 0..WIDTH {
+                let x_comp = 0.5 * (self.grid_x[y][x] + self.grid_x[y][x + 1]);
+                let y_comp = 0.5 * (self.grid_y[y][x] + self.grid_y[y + 1][x]);
+
+                let x = (x as f32 + 0.5) * 50.0;
+                let y = (y as f32 + 0.5) * 50.0;
+
+                let rotation = Mat2::from_angle(f32::atan2(y_comp, x_comp));
+
+                draw_line(x, y, x + x_comp * 50.0, y + y_comp * 50.0, 2.0, BLACK);
+                let tip = Vec2 {
+                    x: x + x_comp * 50.0,
+                    y: y + y_comp * 50.0,
+                };
+                draw_triangle(
+                    tip + rotation.mul_vec2(Vec2 { x: 0.0, y: -5.0 }),
+                    tip + rotation.mul_vec2(Vec2 { x: 0.0, y: 5.0 }),
+                    tip + rotation.mul_vec2(Vec2 { x: 8.66, y: 0.0 }),
+                    BLACK,
+                );
+            }
+        }
+    }
+
+    fn draw_debug(&self) {
         for (y, row) in self.grid_x.iter().enumerate() {
             for (x, cell) in row.iter().enumerate() {
                 let x = x as f32 * 50.0;
@@ -293,20 +319,18 @@ async fn main() {
             let (x, y) = mouse_position();
             let Vec2 { x: dx, y: dy } = mouse_delta_position();
             let (cell_x, cell_y) = vel.get_cell_mut(x / 50.0, y / 50.0);
-            *cell_x -= dx * 10.0;
-            *cell_y -= dy * 10.0;
+            *cell_x -= dx * 50.0;
+            *cell_y -= dy * 50.0;
         }
         clear_background(WHITE);
-        // if is_key_pressed(KeyCode::Space) {
         advect_velocity(&mut vel);
-        // }
         calculate_divergence(&mut divergence, &vel);
         // pressure = Default::default();
-        for _ in 0..200 {
+        for _ in 0..300 {
             calculate_pressure(&mut pressure, &divergence);
         }
         project(&mut vel, &pressure);
-        pressure.draw();
+        divergence.draw();
         vel.draw();
         next_frame().await;
     }
