@@ -1,3 +1,5 @@
+use core::f32;
+
 use macroquad::prelude::*;
 
 fn window_conf() -> Conf {
@@ -83,7 +85,7 @@ impl MacGrid {
         }
     }
 
-    fn draw(&self) {
+    fn draw_arrows(&self) {
         for y in 0..HEIGHT {
             for x in 0..WIDTH {
                 let x_comp = 0.5 * (self.grid_x[y][x] + self.grid_x[y][x + 1]);
@@ -105,6 +107,29 @@ impl MacGrid {
                     tip + rotation.mul_vec2(Vec2 { x: 8.66, y: 0.0 }),
                     BLACK,
                 );
+            }
+        }
+    }
+    fn draw_color(&self) {
+        for y in 0..HEIGHT {
+            for x in 0..WIDTH {
+                let x_comp = 0.5 * (self.grid_x[y][x] + self.grid_x[y][x + 1]);
+                let y_comp = 0.5 * (self.grid_y[y][x] + self.grid_y[y + 1][x]);
+                let angle = f32::atan2(y_comp, x_comp) + f32::consts::PI;
+
+                let h6 = 6.0 * angle / f32::consts::TAU;
+                let r = (h6 - 3.0).abs() - 1.0;
+                let g = 2.0 - (h6 - 2.0).abs();
+                let b = 2.0 - (h6 - 4.0).abs();
+
+                let s = (y_comp.powi(2) + x_comp.powi(2)).sqrt();
+                let color = Color {
+                    r: (r.clamp(0.0, 1.0)),
+                    g: (g.clamp(0.0, 1.0)),
+                    b: (b.clamp(0.0, 1.0)),
+                    a: s * 0.5,
+                };
+                draw_rectangle(x as f32 * 50.0, y as f32 * 50.0, 50.0, 50.0, color);
             }
         }
     }
@@ -330,8 +355,9 @@ async fn main() {
             calculate_pressure(&mut pressure, &divergence);
         }
         project(&mut vel, &pressure);
-        divergence.draw();
-        vel.draw();
+        // divergence.draw();
+        vel.draw_color();
+        vel.draw_arrows();
         next_frame().await;
     }
 }
