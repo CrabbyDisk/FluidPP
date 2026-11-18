@@ -134,6 +134,33 @@ impl MacGrid {
         }
     }
 
+    fn draw_streamline(&self) {
+        for y in 0..HEIGHT {
+            if y % 2 == 0 {
+                for x in 0..WIDTH {
+                    if x % 2 == 0 {
+                        let mut x = x as f32 + 0.5;
+                        let mut y = y as f32 + 0.5;
+                        for _ in 0..20 {
+                            let x_comp = self.bilinear_x(x, y) * 0.5;
+                            let y_comp = self.bilinear_y(x, y) * 0.5;
+                            draw_line(
+                                x * 50.0,
+                                y * 50.0,
+                                (x + x_comp) * 50.0,
+                                (y + y_comp) * 50.0,
+                                2.0,
+                                BLACK,
+                            );
+                            x += x_comp;
+                            y += y_comp;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn draw_debug(&self) {
         for (y, row) in self.grid_x.iter().enumerate() {
             for (x, cell) in row.iter().enumerate() {
@@ -357,7 +384,7 @@ async fn main() {
         project(&mut vel, &pressure);
         // divergence.draw();
         vel.draw_color();
-        vel.draw_arrows();
+        vel.draw_streamline();
         next_frame().await;
     }
 }
