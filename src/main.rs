@@ -1,6 +1,10 @@
 use core::f32;
+use std::fmt;
 
-use macroquad::prelude::*;
+use macroquad::{
+    prelude::*,
+    ui::{hash, root_ui, widgets},
+};
 
 fn window_conf() -> Conf {
     use macroquad::miniquad;
@@ -16,10 +20,10 @@ fn window_conf() -> Conf {
     }
 }
 
-const WIDTH: usize = 32;
+const WIDTH: usize = 64;
 const FWIDTH: f32 = WIDTH as f32;
 
-const HEIGHT: usize = 18;
+const HEIGHT: usize = 36;
 const FHEIGHT: f32 = HEIGHT as f32;
 
 const DT: f32 = 0.16;
@@ -91,15 +95,15 @@ impl MacGrid {
                 let x_comp = 0.5 * (self.grid_x[y][x] + self.grid_x[y][x + 1]);
                 let y_comp = 0.5 * (self.grid_y[y][x] + self.grid_y[y + 1][x]);
 
-                let x = (x as f32 + 0.5) * 50.0;
-                let y = (y as f32 + 0.5) * 50.0;
+                let x = (x as f32 + 0.5) * 20.0;
+                let y = (y as f32 + 0.5) * 20.0;
 
                 let rotation = Mat2::from_angle(f32::atan2(y_comp, x_comp));
 
-                draw_line(x, y, x + x_comp * 50.0, y + y_comp * 50.0, 2.0, BLACK);
+                draw_line(x, y, x + x_comp * 20.0, y + y_comp * 20.0, 2.0, BLACK);
                 let tip = Vec2 {
-                    x: x + x_comp * 50.0,
-                    y: y + y_comp * 50.0,
+                    x: x + x_comp * 20.0,
+                    y: y + y_comp * 20.0,
                 };
                 draw_triangle(
                     tip + rotation.mul_vec2(Vec2 { x: 0.0, y: -5.0 }),
@@ -129,7 +133,7 @@ impl MacGrid {
                     b: (b.clamp(0.0, 1.0)),
                     a: s * 0.5,
                 };
-                draw_rectangle(x as f32 * 50.0, y as f32 * 50.0, 50.0, 50.0, color);
+                draw_rectangle(x as f32 * 20.0, y as f32 * 20.0, 20.0, 20.0, color);
             }
         }
     }
@@ -141,14 +145,14 @@ impl MacGrid {
                     if x % 2 == 0 {
                         let mut x = x as f32 + 0.5;
                         let mut y = y as f32 + 0.5;
-                        for _ in 0..20 {
+                        for _ in 0..10 {
                             let x_comp = self.bilinear_x(x, y) * 0.5;
                             let y_comp = self.bilinear_y(x, y) * 0.5;
                             draw_line(
-                                x * 50.0,
-                                y * 50.0,
-                                (x + x_comp) * 50.0,
-                                (y + y_comp) * 50.0,
+                                x * 20.0,
+                                y * 20.0,
+                                (x + x_comp) * 20.0,
+                                (y + y_comp) * 20.0,
                                 2.0,
                                 BLACK,
                             );
@@ -164,8 +168,8 @@ impl MacGrid {
     fn draw_debug(&self) {
         for (y, row) in self.grid_x.iter().enumerate() {
             for (x, cell) in row.iter().enumerate() {
-                let x = x as f32 * 50.0;
-                let y = y as f32 * 50.0 + 25.0;
+                let x = x as f32 * 20.0;
+                let y = y as f32 * 20.0 + 25.0;
                 draw_line(
                     x,
                     y,
@@ -176,15 +180,15 @@ impl MacGrid {
                 );
                 draw_triangle(
                     Vec2 {
-                        x: x + cell * 25.0,
+                        x: x + cell * 10.0,
                         y: y - 5.0,
                     },
                     Vec2 {
-                        x: x + cell * 25.0,
+                        x: x + cell * 10.0,
                         y: y + 5.0,
                     },
                     Vec2 {
-                        x: x + cell * 25.0 + 7.0 * cell.signum(),
+                        x: x + cell * 10.0 + 7.0 * cell.signum(),
                         y,
                     },
                     if *cell > 0.0 { BLUE } else { RED },
@@ -193,27 +197,27 @@ impl MacGrid {
         }
         for (y, row) in self.grid_y.iter().enumerate() {
             for (x, cell) in row.iter().enumerate() {
-                let x = x as f32 * 50.0 + 25.0;
-                let y = y as f32 * 50.0;
+                let x = x as f32 * 20.0 + 10.0;
+                let y = y as f32 * 20.0;
                 draw_line(
                     x,
                     y,
                     x,
-                    y + cell * 25.0,
+                    y + cell * 10.0,
                     2.0,
                     if *cell > 0.0 { BLUE } else { RED },
                 );
                 draw_triangle(
                     Vec2 {
-                        y: y + cell * 25.0,
+                        y: y + cell * 10.0,
                         x: x - 5.0,
                     },
                     Vec2 {
-                        y: y + cell * 25.0,
+                        y: y + cell * 10.0,
                         x: x + 5.0,
                     },
                     Vec2 {
-                        y: y + cell * 25.0 + 7.0 * cell.signum(),
+                        y: y + cell * 10.0 + 7.0 * cell.signum(),
                         x,
                     },
                     if *cell > 0.0 { BLUE } else { RED },
@@ -249,7 +253,7 @@ impl Grid {
         for (y, row) in self.grid.iter().enumerate() {
             for (x, cell) in row.iter().enumerate() {
                 let color = if *cell > 0.0 { BLUE } else { RED }.with_alpha(cell.abs());
-                draw_rectangle(x as f32 * 50.0, y as f32 * 50.0, 50.0, 50.0, color);
+                draw_rectangle(x as f32 * 20.0, y as f32 * 20.0, 20.0, 20.0, color);
             }
         }
     }
@@ -366,11 +370,24 @@ async fn main() {
     // The pressures and divergences to correct are stored in a standard grid since it's more appropriate in this case
     let mut divergence: Grid = Default::default();
     let mut pressure: Grid = Default::default();
+    let mut low = i32::MAX;
+
+    let mut draw = Some(0);
     loop {
+        widgets::Window::new(hash!(), vec2(0.0, 0.0), vec2(400., 100.))
+            .label("Window")
+            .ui(&mut root_ui(), |ui| {
+                ui.combo_box(
+                    hash!(),
+                    "Velocity drawing mode",
+                    &["Velocity arrows", "Streamlines", "Color coded velocities"],
+                    &mut draw,
+                );
+            });
         if is_mouse_button_down(MouseButton::Left) {
             let (x, y) = mouse_position();
             let Vec2 { x: dx, y: dy } = mouse_delta_position();
-            let (cell_x, cell_y) = vel.get_cell_mut(x / 50.0, y / 50.0);
+            let (cell_x, cell_y) = vel.get_cell_mut(x / 20.0, y / 20.0);
             *cell_x -= dx * 50.0;
             *cell_y -= dy * 50.0;
         }
@@ -382,9 +399,22 @@ async fn main() {
             calculate_pressure(&mut pressure, &divergence);
         }
         project(&mut vel, &pressure);
-        // divergence.draw();
-        vel.draw_color();
-        vel.draw_streamline();
+
+        draw_text(format!("FPS: {}", get_fps()), 0.0, 24.0, 24.0, BLACK);
+        if is_key_released(KeyCode::R) {
+            low = i32::MAX;
+        }
+        low = i32::min(low, get_fps());
+        draw_text(format!("Lowest: {}", low), 0.0, 48.0, 24.0, BLACK);
+        if let Some(val) = draw {
+            match val {
+                0 => vel.draw_arrows(),
+                1 => vel.draw_streamline(),
+                2 => vel.draw_color(),
+                _ => (),
+            };
+        }
+
         next_frame().await;
     }
 }
