@@ -1,4 +1,5 @@
 const std = @import("std");
+
 const rl = @import("raylib");
 
 const WIDTH = 96;
@@ -12,7 +13,7 @@ const vec = @Vector(vecLen, f32);
 const GridSimd = [HEIGHT][@divExact(WIDTH, vecLen)]vec;
 const Grid = [HEIGHT][WIDTH]f32;
 
-fn calcDiv(div: *Grid, vel: MacGrid) void {
+fn calcDiv(div: *Grid, vel: *const MacGrid) void {
     for (div, 0..) |*row, y| {
         for (row, 0..) |*cell, x| {
             const left = vel.gridX[y][x];
@@ -40,18 +41,16 @@ fn calcPressure(pressure: *Grid, divergence: *const Grid) void {
 fn calcPressureSimd(pressure: *GridSimd, divergence: *const GridSimd) void {
     const old = pressure.*;
     for (pressure, 0..) |*row, y| {
-        for (row, 0..) |*chunk, xChunk| {
-            const top = if (y == 0) old[y][xChunk] else old[y - 1][xChunk];
-            const btm = if (y == HEIGHT - 1) old[y][xChunk] else old[y + 1][xChunk];
+        for (row, 0..) |*chunk, xStart| {
+            const top = if (y == 0) old[y][xStart] else old[y - 1][xStart];
+            const btm = if (y == HEIGHT - 1) old[y][xStart] else old[y + 1][xStart];
 
-            // const left = if (x == 0) old[y][x] else old[y][x - 1];
-            const prevLast = if (xChunk == 0) old[y][xChunk][0] else old[y][xChunk - 1][vecLen - 1];
-            const left = std.simd.shiftElementsRight(old[y][xChunk], 1, prevLast);
+            const prevLast = if (xStart == 0) old[y][xStart][0] else old[y][xStart - 1][vecLen - 1];
+            const left = std.simd.shiftElementsRight(old[y][xStart], 1, prevLast);
 
-            // const right = if (x == WIDTH - 1) old[y][x] else old[y][x + 1];
-            const nextFirst = if (xChunk == WIDTH / vecLen - 1) old[y][xChunk][vecLen - 1] else old[y][xChunk + 1][0];
-            const right = std.simd.shiftElementsLeft(old[y][xChunk], 1, nextFirst);
-            chunk.* = (top + btm + right + left - divergence[y][xChunk]) / @as(vec, @splat(4.0));
+            const nextFirst = if (xStart == WIDTH / vecLen - 1) old[y][xStart][vecLen - 1] else old[y][xStart + 1][0];
+            const right = std.simd.shiftElementsLeft(old[y][xStart], 1, nextFirst);
+            chunk.* = (top + btm + right + left - divergence[y][xStart]) / @as(vec, @splat(4.0));
         }
     }
 }
@@ -74,56 +73,51 @@ const MacGrid = struct {
         };
     }
 
-    fn bilinearX(self: MacGrid, x: f32, yOffset: f32) f32 {
-        const y = yOffset - 0.5;
-        if (y < 0.0) {
-            const left = self.gridX[0][@trunc(x)];
-            const right = self.gridX[0][@min(@as(usize, @trunc(x)) + 1, WIDTH)];
-            return right * (x - @floor(x)) + left * (1.0 - x + @floor(x));
-        } else if (y >= HEIGHT - 1.0) {
-            const left = self.gridX[HEIGHT - 1][@trunc(x)];
-            const right = self.gridX[HEIGHT - 1][@min(@as(usize, @trunc(x)) + 1, WIDTH)];
-            return right * (x - @floor(x)) + left * (1.0 - x + @floor(x));
+    /// X is 0 on the leftmost edge
+    /// Y is 0 at the center of the topmost cell
+    fn bilinearX(self: *const MacGrid, x: f32, y: f32) f32 {
+        const truncY: usize = @trunc(y);
+        const truncX: usize = @trunc(x);
+        if (y >= HEIGHT - 1.0) {
+            const left = self.gridX[HEIGHT - 1][truncX];
+            const right = self.gridX[HEIGHT - 1][truncX + 1];
+            return right * (x - @trunc(x) + left * (1.0 - x + @trunc(x)));
         } else {
-            const topLeft = self.gridX[@trunc(y)][@trunc(x)];
-            const topRight = self.gridX[@trunc(y)][@min(@as(usize, @trunc(x)) + 1, WIDTH)];
-            const btmLeft = self.gridX[@as(usize, @trunc(y)) + 1][@trunc(x)];
-            const btmRight = self.gridX[@as(usize, @trunc(y)) + 1][@min(@as(usize, @trunc(x)) + 1, WIDTH)];
+            const topLeft = self.gridX[truncY][truncX];
+            const topRight = self.gridX[truncY][truncX + 1];
+            const btmLeft = self.gridX[truncY + 1][truncX];
+            const btmRight = self.gridX[truncY + 1][truncX + 1];
 
-            const top = topRight * (x - @floor(x)) + topLeft * (1.0 - x + @floor(x));
-            const btm = btmRight * (x - @floor(x)) + btmLeft * (1.0 - x + @floor(x));
-            return btm * (y - @floor(y)) + top * (1.0 - y + @floor(y));
+            const top = topRight * (x - @trunc(x)) + topLeft * (1.0 - x + @trunc(x));
+            const btm = btmRight * (x - @trunc(x)) + btmLeft * (1.0 - x + @trunc(x));
+            return btm * (y - @trunc(y)) + top * (1.0 - y + @trunc(y));
         }
     }
 
-    fn bilinearY(self: MacGrid, xOffset: f32, y: f32) f32 {
-        const x = xOffset - 0.5;
-        if (x < 0.0) {
-            const top = self.gridY[@trunc(y)][0];
-            const btm = self.gridY[@min(@as(usize, @trunc(y)) + 1, HEIGHT)][0];
-            return btm * (y - @floor(y)) + top * (1.0 - y + @floor(y));
-        }
+    /// X is 0 at the center of the leftmost cell
+    /// Y is 0 on the topmost edge
+    fn bilinearY(self: *const MacGrid, x: f32, y: f32) f32 {
         if (x >= WIDTH - 1.0) {
             const top = self.gridY[@trunc(y)][WIDTH - 1];
-            const btm = self.gridY[@min(@as(usize, @trunc(y)) + 1, HEIGHT)][WIDTH - 1];
-            return btm * (y - @floor(y)) + top * (1.0 - y + @floor(y));
+            const btm = self.gridY[@as(usize, @trunc(y)) + 1][WIDTH - 1];
+            return btm * (y - @trunc(y)) + top * (1.0 - y + @trunc(y));
         } else {
             const topLeft = self.gridY[@trunc(y)][@trunc(x)];
             const topRight = self.gridY[@trunc(y)][@as(usize, @trunc(x)) + 1];
-            const btmLeft = self.gridY[@min(@as(usize, @trunc(y)) + 1, HEIGHT)][@trunc(x)];
-            const btmRight = self.gridY[@min(@as(usize, @trunc(y)) + 1, HEIGHT)][@as(usize, @trunc(x)) + 1];
+            const btmLeft = self.gridY[@as(usize, @trunc(y)) + 1][@trunc(x)];
+            const btmRight = self.gridY[@as(usize, @trunc(y)) + 1][@as(usize, @trunc(x)) + 1];
 
-            const top = topRight * (x - @floor(x)) + topLeft * (1.0 - x + @floor(x));
-            const btm = btmRight * (x - @floor(x)) + btmLeft * (1.0 - x + @floor(x));
-            return btm * (y - @floor(y)) + top * (1.0 - y + @floor(y));
+            const top = topRight * (x - @trunc(x)) + topLeft * (1.0 - x + @trunc(x));
+            const btm = btmRight * (x - @trunc(x)) + btmLeft * (1.0 - x + @trunc(x));
+            return btm * (y - @trunc(y)) + top * (1.0 - y + @trunc(y));
         }
     }
 
-    fn drawArrows(self: MacGrid) void {
+    fn drawArrows(self: *MacGrid) void {
         for (0..HEIGHT) |y| {
             for (0..WIDTH) |x| {
-                const xComp = 0.5 * (self.gridX[y][x] + self.gridX[y][x + 1]) * SCALE / 10.0;
-                const yComp = 0.5 * (self.gridY[y][x] + self.gridY[y + 1][x]) * SCALE / 10.0;
+                const xComp = 0.5 * (self.gridX[y][x] + self.gridX[y][x + 1]) * SCALE;
+                const yComp = 0.5 * (self.gridY[y][x] + self.gridY[y + 1][x]) * SCALE;
                 const xPos: f32 = (@as(f32, @floatFromInt(x)) + 0.5) * SCALE;
                 const yPos: f32 = (@as(f32, @floatFromInt(y)) + 0.5) * SCALE;
 
@@ -144,9 +138,32 @@ const MacGrid = struct {
             }
         }
     }
+
+    fn drawStreamlines(self: *MacGrid) void {
+        for (0..HEIGHT) |y| {
+            for (0..WIDTH) |x| {
+                var xPos = @as(f32, @floatFromInt(x)) + 0.5;
+                var yPos = @as(f32, @floatFromInt(y)) + 0.5;
+                var length: f32 = 0.0;
+                var points: [32]rl.Vector2 = undefined;
+                const len = for (&points, 0..) |*point, count| {
+                    if (length >= 5.0) {
+                        break count;
+                    }
+                    point.* = rl.Vector2{ .x = xPos * SCALE, .y = yPos * SCALE };
+                    const xComp = self.bilinearX(xPos, yPos - 0.5) * 0.5;
+                    const yComp = self.bilinearY(xPos - 0.5, yPos) * 0.5;
+                    length += xComp + yComp;
+                    xPos += xComp;
+                    yPos += yComp;
+                } else points.len;
+                rl.drawLineStrip(points[0..len], .black);
+            }
+        }
+    }
 };
 
-fn project(vel: *MacGrid, pressure: Grid) void {
+fn project(vel: *MacGrid, pressure: *const Grid) void {
     for (&vel.gridX, 0..) |*row, y| {
         for (row, 0..) |*cell, x| {
             if (x == 0 or x == WIDTH) {
@@ -175,89 +192,48 @@ fn advect(vel: *MacGrid) void {
     const old = vel.*;
     for (&vel.gridX, 0..) |*row, y| {
         for (row, 0..) |*cell, x| {
-            const posX: f32 = @floatFromInt(x);
-            const posY: f32 = @as(f32, @floatFromInt(y)) + 0.5;
-            const dX = old.gridX[y][x];
-            const dY = old.bilinearY(posX, posY);
-            const backX = posX - dX * DT;
-            const backY = posY - dY * DT;
-            cell.* = vel.bilinearX(backX, backY);
-        }
-    }
-    for (&vel.gridY, 0..) |*row, y| {
-        for (row, 0..) |*cell, x| {
-            const posX: f32 = @as(f32, @floatFromInt(x)) + 0.5;
-            const posY: f32 = @as(f32, @floatFromInt(y));
-            const dX = old.bilinearX(posX, posY);
-            const dY = old.gridY[y][x];
-            const backX = posX - dX * DT;
-            const backY = posY - dY * DT;
-            cell.* = vel.bilinearY(backX, backY);
-        }
-    }
-}
+            if (x == 0 or x == WIDTH) continue;
 
-fn advect2(vel: *MacGrid) void {
-    const old = vel.*;
-    for (&vel.gridX, 0..) |*row, y| {
-        for (row, 0..) |*cell, x| {
             const posX: f32 = @floatFromInt(x);
-            const posY: f32 = @as(f32, @floatFromInt(y)) + 0.5;
-            const dX = old.gridX[y][x];
+            const posY: f32 = @floatFromInt(y);
 
+            const dX = old.gridX[y][x];
             const dY = blk: {
-                if (x == 0) {
-                    const top = old.gridY[y][0];
-                    const btm = old.gridY[y + 1][0];
-                    break :blk (btm + top) * 0.5;
-                } else if (x == WIDTH - 1) {
-                    const top = old.gridY[y][WIDTH - 1];
-                    const btm = old.gridY[y + 1][WIDTH - 1];
-                    break :blk (btm + top) * 0.5;
-                } else {
-                    const topRight = old.gridY[y][x];
-                    const topLeft = old.gridY[y][x - 1];
-                    const btmRight = old.gridY[y + 1][x];
-                    const btmLeft = old.gridY[y + 1][x - 1];
-                    break :blk (topLeft + topRight + btmLeft + btmRight) * 0.25;
-                }
+                const topRight = old.gridY[y][x];
+                const topLeft = old.gridY[y][x - 1];
+                const btmRight = old.gridY[y + 1][x];
+                const btmLeft = old.gridY[y + 1][x - 1];
+                break :blk (topLeft + topRight + btmLeft + btmRight) * 0.25;
             };
 
             const backX = posX - dX * DT;
             const backY = posY - dY * DT;
-            cell.* = vel.bilinearX(backX, backY);
+            cell.* = old.bilinearX(backX, backY);
         }
     }
     for (&vel.gridY, 0..) |*row, y| {
+        if (y == 0 or y == HEIGHT) continue;
+
         for (row, 0..) |*cell, x| {
-            const posX: f32 = @as(f32, @floatFromInt(x)) + 0.5;
-            const posY: f32 = @as(f32, @floatFromInt(y));
+            const posX: f32 = @floatFromInt(x);
+            const posY: f32 = @floatFromInt(y);
 
             const dX = blk: {
-                if (y == 0) {
-                    const left = old.gridX[0][x];
-                    const right = old.gridX[0][x + 1];
-                    break :blk (left + right) * 0.5;
-                } else if (y == HEIGHT - 1) {
-                    const left = old.gridX[HEIGHT - 1][x];
-                    const right = old.gridX[HEIGHT - 1][x + 1];
-                    break :blk (left + right) * 0.5;
-                } else {
-                    const btmLeft = old.gridX[y][x];
-                    const topLeft = old.gridX[y - 1][x];
-                    const btmRight = old.gridX[y][x + 1];
-                    const topRight = old.gridX[y - 1][x + 1];
-                    break :blk (topLeft + topRight + btmLeft + btmRight) * 0.25;
-                }
+                const btmLeft = old.gridX[y][x];
+                const topLeft = old.gridX[y - 1][x];
+                const btmRight = old.gridX[y][x + 1];
+                const topRight = old.gridX[y - 1][x + 1];
+                break :blk (topLeft + topRight + btmLeft + btmRight) * 0.25;
             };
-
             const dY = old.gridY[y][x];
+
             const backX = posX - dX * DT;
             const backY = posY - dY * DT;
-            cell.* = vel.bilinearY(backX, backY);
+            cell.* = old.bilinearY(backX, backY);
         }
     }
 }
+
 pub fn main(init: std.process.Init) !void {
     // Initialization
     //--------------------------------------------------------------------------------------
@@ -265,8 +241,8 @@ pub fn main(init: std.process.Init) !void {
     const screenHeight = 450;
 
     rl.setConfigFlags(.{ .vsync_hint = true, .fullscreen_mode = true });
-    rl.initWindow(screenWidth, screenHeight, "raylib-zig [core] example - basic window");
-    defer rl.closeWindow(); // Close window and OpenGL context
+    rl.initWindow(screenWidth, screenHeight, "Fluid Sim");
+    defer rl.closeWindow();
 
     //--------------------------------------------------------------------------------------
 
@@ -278,9 +254,7 @@ pub fn main(init: std.process.Init) !void {
     var useSimd = true;
     var useNewAdvect = true;
 
-    // Main game loop
-    while (!rl.windowShouldClose()) { // Detect window close button or ESC key
-
+    while (!rl.windowShouldClose()) {
         const pos = rl.getMousePosition();
         if (rl.isMouseButtonDown(.left)) {
             const delta = rl.getMouseDelta();
@@ -292,7 +266,8 @@ pub fn main(init: std.process.Init) !void {
         //----------------------------------------------------------------------------------
 
         const updateStart = clock.now(init.io);
-        calcDiv(&div, vel);
+        // for (0..8) |_| {
+        calcDiv(&div, &vel);
         if (useSimd) {
             for (0..400) |_| {
                 calcPressureSimd(@ptrCast(&pressure), @ptrCast(&div));
@@ -308,12 +283,9 @@ pub fn main(init: std.process.Init) !void {
         if (rl.isKeyPressed(.a)) {
             useNewAdvect = !useNewAdvect;
         }
-        project(&vel, pressure);
-        if (useNewAdvect) {
-            advect2(&vel);
-        } else {
-            advect(&vel);
-        }
+        project(&vel, &pressure);
+        advect(&vel);
+        // }
         const updateTime = updateStart.untilNow(init.io, clock);
         //----------------------------------------------------------------------------------
 
@@ -324,7 +296,8 @@ pub fn main(init: std.process.Init) !void {
         const drawStart = clock.now(init.io);
 
         rl.clearBackground(.white);
-        vel.drawArrows();
+        // vel.drawArrows();
+        vel.drawStreamlines();
 
         const drawTime = drawStart.untilNow(init.io, clock);
 
