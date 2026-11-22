@@ -5,7 +5,10 @@ use macroquad::{
     prelude::*,
     ui::{hash, root_ui, widgets},
 };
-use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
+use rayon::{
+    iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator},
+    slice::ParallelSliceMut,
+};
 
 fn window_conf() -> Conf {
     use macroquad::miniquad;
@@ -145,9 +148,11 @@ impl MacGrid {
                     if x % 2 == 0 {
                         let mut x = x as f32 + 0.5;
                         let mut y = y as f32 + 0.5;
-                        for _ in 0..10 {
-                            let x_comp = self.bilinear_x(x, y) * 0.5;
-                            let y_comp = self.bilinear_y(x, y) * 0.5;
+                        let mut length = 0.0;
+                        for _ in 0..50 {
+                            let x_comp = self.bilinear_x(x, y) * 0.4;
+                            let y_comp = self.bilinear_y(x, y) * 0.4;
+                            length += x_comp + y_comp;
                             draw_line(
                                 x * SCALE,
                                 y * SCALE,
@@ -156,6 +161,9 @@ impl MacGrid {
                                 2.0,
                                 BLACK,
                             );
+                            if length >= 5.0 {
+                                break;
+                            }
                             x += x_comp;
                             y += y_comp;
                         }
@@ -191,7 +199,7 @@ impl Grid {
     fn draw(&self) {
         for (y, row) in self.grid.iter().enumerate() {
             for (x, cell) in row.iter().enumerate() {
-                let color = if *cell > 0.0 { BLUE } else { RED }.with_alpha(cell.abs());
+                let color = if *cell > 0.0 { BLUE } else { RED }.with_alpha(cell.abs() * 10.0);
                 draw_rectangle(x as f32 * SCALE, y as f32 * SCALE, SCALE, SCALE, color);
             }
         }
@@ -248,6 +256,43 @@ fn calculate_pressure(pressure: &mut Grid, divergence: &Grid) {
     });
 }
 
+fn par_calculate_pressure(pressure: &mut Grid, divergence: &Grid) {
+    let old = *pressure;
+    pressure
+        .grid
+        .par_chunks_mut(6)
+        .enumerate()
+        .for_each(|(offset, chunk)| {
+            for (y, row) in chunk.iter_mut().enumerate() {
+                let y = offset * 6 + y;
+                for (x, cell) in row.iter_mut().enumerate() {
+                    let top = if y == 0 {
+                        old.grid[y][x]
+                    } else {
+                        old.grid[y - 1][x]
+                    };
+
+                    let btm = if y == HEIGHT - 1 {
+                        old.grid[y][x]
+                    } else {
+                        old.grid[y + 1][x]
+                    };
+                    let left = if x == 0 {
+                        old.grid[y][x]
+                    } else {
+                        old.grid[y][x - 1]
+                    };
+                    let right = if x == WIDTH - 1 {
+                        old.grid[y][x]
+                    } else {
+                        old.grid[y][x + 1]
+                    };
+                    *cell = (top + btm + right + left - divergence.grid[y][x]) / 4.0;
+                }
+            }
+        });
+}
+
 fn project(vel: &mut MacGrid, pressure: &Grid) {
     for (y, row) in vel.grid_x.iter_mut().enumerate() {
         for (x, cell) in row.iter_mut().enumerate() {
@@ -291,11 +336,16 @@ fn advect_velocity(vel: &mut MacGrid) {
     }
     for (y, row) in vel.grid_y.iter_mut().enumerate() {
         for (x, cell) in row.iter_mut().enumerate() {
-            let pos_y = y as f32;
             let pos_x = x as f32 + 0.5;
-            let dy = old.grid_y[y][x];
+            let pos_y = y as f32;
+
             let dx = old.bilinear_x(pos_x, pos_y);
-            *cell = old.bilinear_y(pos_x - dx * 0.0005, pos_y - dy * 0.0005);
+            let dy = old.grid_y[y][x];
+
+            let back_x = pos_x - dx * DT;
+            let back_y = pos_y - dy * DT;
+
+            *cell = old.bilinear_y(back_x, back_y);
         }
     }
 }
@@ -310,7 +360,6 @@ async fn main() {
     let mut divergence: Grid = Default::default();
     let mut pressure: Grid = Default::default();
     let mut low = i32::MAX;
-
     let mut draw = Some(0);
     loop {
         widgets::Window::new(hash!(), vec2(0.0, 0.0), vec2(400., 100.))
@@ -336,14 +385,14 @@ async fn main() {
         calculate_divergence(&mut divergence, &vel);
         // pressure = Default::default();
         for _ in 0..400 {
-            calculate_pressure(&mut pressure, &divergence);
+            par_calculate_pressure(&mut pressure, &divergence);
         }
         project(&mut vel, &pressure);
-        let sim_duration = sim_start.elapsed().as_millis();
-
-        clear_background(WHITE);
+        let sim_duration = sim_start.elapsed();
 
         let draw_start = Instant::now();
+        clear_background(WHITE);
+        // calculate_divergence(&mut divergence, &vel);
         // divergence.draw();
         if let Some(val) = draw {
             match val {
@@ -362,7 +411,7 @@ async fn main() {
         low = i32::min(low, get_fps());
         draw_text(format!("Lowest: {}", low), 0.0, 48.0, 24.0, BLACK);
         draw_text(
-            format!("Simulation time: {}", sim_duration),
+            format!("Simulation time: {:#?}", sim_duration),
             0.0,
             72.0,
             24.0,
