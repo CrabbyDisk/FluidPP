@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const rl = @import("raylib");
+const rg = @import("raygui");
 
 const WIDTH = 96;
 const HEIGHT = 54;
@@ -25,20 +26,7 @@ fn calcDiv(div: *Grid, vel: *const MacGrid) void {
     }
 }
 
-fn calcPressure(pressure: *Grid, divergence: *const Grid) void {
-    const old = pressure.*;
-    for (pressure, 0..) |*row, y| {
-        for (row, 0..) |*cell, x| {
-            const top = if (y == 0) old[y][x] else old[y - 1][x];
-            const btm = if (y == HEIGHT - 1) old[y][x] else old[y + 1][x];
-            const left = if (x == 0) old[y][x] else old[y][x - 1];
-            const right = if (x == WIDTH - 1) old[y][x] else old[y][x + 1];
-            cell.* = (top + btm + right + left - divergence[y][x]) / 4.0;
-        }
-    }
-}
-
-fn calcPressureSimd(pressure: *GridSimd, divergence: *const GridSimd) void {
+fn calcPressure(pressure: *GridSimd, divergence: *const GridSimd) void {
     const old = pressure.*;
     for (pressure, 0..) |*row, y| {
         for (row, 0..) |*chunk, xStart| {
@@ -76,12 +64,12 @@ const MacGrid = struct {
     /// X is 0 on the leftmost edge
     /// Y is 0 at the center of the topmost cell
     fn bilinearX(self: *const MacGrid, x: f32, y: f32) f32 {
-        const truncY: usize = @trunc(y);
         const truncX: usize = @trunc(x);
+        const truncY: usize = @trunc(y);
         if (y >= HEIGHT - 1.0) {
             const left = self.gridX[HEIGHT - 1][truncX];
             const right = self.gridX[HEIGHT - 1][truncX + 1];
-            return right * (x - @trunc(x) + left * (1.0 - x + @trunc(x)));
+            return right * (x - @trunc(x)) + left * (1.0 - x + @trunc(x));
         } else {
             const topLeft = self.gridX[truncY][truncX];
             const topRight = self.gridX[truncY][truncX + 1];
@@ -97,15 +85,17 @@ const MacGrid = struct {
     /// X is 0 at the center of the leftmost cell
     /// Y is 0 on the topmost edge
     fn bilinearY(self: *const MacGrid, x: f32, y: f32) f32 {
+        const truncX: usize = @trunc(x);
+        const truncY: usize = @trunc(y);
         if (x >= WIDTH - 1.0) {
-            const top = self.gridY[@trunc(y)][WIDTH - 1];
-            const btm = self.gridY[@as(usize, @trunc(y)) + 1][WIDTH - 1];
+            const top = self.gridY[truncY][WIDTH - 1];
+            const btm = self.gridY[truncY + 1][WIDTH - 1];
             return btm * (y - @trunc(y)) + top * (1.0 - y + @trunc(y));
         } else {
-            const topLeft = self.gridY[@trunc(y)][@trunc(x)];
-            const topRight = self.gridY[@trunc(y)][@as(usize, @trunc(x)) + 1];
-            const btmLeft = self.gridY[@as(usize, @trunc(y)) + 1][@trunc(x)];
-            const btmRight = self.gridY[@as(usize, @trunc(y)) + 1][@as(usize, @trunc(x)) + 1];
+            const topLeft = self.gridY[truncY][truncX];
+            const topRight = self.gridY[truncY][truncX + 1];
+            const btmLeft = self.gridY[truncY + 1][truncX];
+            const btmRight = self.gridY[truncY + 1][truncX + 1];
 
             const top = topRight * (x - @trunc(x)) + topLeft * (1.0 - x + @trunc(x));
             const btm = btmRight * (x - @trunc(x)) + btmLeft * (1.0 - x + @trunc(x));
@@ -139,6 +129,30 @@ const MacGrid = struct {
         }
     }
 
+    fn drawColor(self: *MacGrid) void {
+        for (0..HEIGHT) |y| {
+            for (0..WIDTH) |x| {
+                const xComp = (self.gridX[y][x] + self.gridX[y][x + 1]);
+                const yComp = (self.gridY[y][x] + self.gridY[y + 1][x]);
+                const angle = std.math.atan2(yComp, xComp) + std.math.pi;
+
+                const h6 = angle * 6.0 / std.math.tau;
+                const r = @abs(h6 - 3.0) - 1.0;
+                const g = 2.0 - @abs(h6 - 2.0);
+                const b = 2.0 - @abs(h6 - 4.0);
+
+                const color = rl.colorFromNormalized(.{
+                    .x = std.math.clamp(r, 0.0, 1.0),
+                    .y = std.math.clamp(g, 0.0, 1.0),
+                    .z = std.math.clamp(b, 0.0, 1.0),
+                    .w = std.math.clamp(@sqrt(@abs(xComp) + @abs(yComp)) * 0.5, 0.0, 1.0),
+                });
+
+                rl.drawRectangleV(.{ .x = @as(f32, @floatFromInt(x)) * SCALE, .y = @as(f32, @floatFromInt(y)) * SCALE }, .{ .x = SCALE, .y = SCALE }, color);
+            }
+        }
+    }
+
     fn drawStreamlines(self: *MacGrid) void {
         for (0..HEIGHT) |y| {
             for (0..WIDTH) |x| {
@@ -153,7 +167,7 @@ const MacGrid = struct {
                     point.* = rl.Vector2{ .x = xPos * SCALE, .y = yPos * SCALE };
                     const xComp = self.bilinearX(xPos, yPos - 0.5) * 0.5;
                     const yComp = self.bilinearY(xPos - 0.5, yPos) * 0.5;
-                    length += xComp + yComp;
+                    length += @abs(xComp) + @abs(yComp);
                     xPos += xComp;
                     yPos += yComp;
                 } else points.len;
@@ -162,6 +176,19 @@ const MacGrid = struct {
         }
     }
 };
+
+fn drawPressure(pressure: *const Grid) void {
+    for (0..HEIGHT) |y| {
+        for (0..WIDTH) |x| {
+            const color = if (pressure[y][x] >= 0) rl.Color.blue else rl.Color.red;
+            rl.drawRectangleV(
+                .{ .x = @as(f32, @floatFromInt(x)) * SCALE, .y = @as(f32, @floatFromInt(y)) * SCALE },
+                .{ .x = SCALE, .y = SCALE },
+                color.alpha(10.0 * @abs(pressure[y][x])),
+            );
+        }
+    }
+}
 
 fn project(vel: *MacGrid, pressure: *const Grid) void {
     for (&vel.gridX, 0..) |*row, y| {
@@ -199,10 +226,10 @@ fn advect(vel: *MacGrid) void {
 
             const dX = old.gridX[y][x];
             const dY = blk: {
-                const topRight = old.gridY[y][x];
                 const topLeft = old.gridY[y][x - 1];
-                const btmRight = old.gridY[y + 1][x];
+                const topRight = old.gridY[y][x];
                 const btmLeft = old.gridY[y + 1][x - 1];
+                const btmRight = old.gridY[y + 1][x];
                 break :blk (topLeft + topRight + btmLeft + btmRight) * 0.25;
             };
 
@@ -211,10 +238,11 @@ fn advect(vel: *MacGrid) void {
             cell.* = old.bilinearX(backX, backY);
         }
     }
-    for (&vel.gridY, 0..) |*row, y| {
-        if (y == 0 or y == HEIGHT) continue;
 
+    for (&vel.gridY, 0..) |*row, y| {
         for (row, 0..) |*cell, x| {
+            if (y == 0 or y == HEIGHT) continue;
+
             const posX: f32 = @floatFromInt(x);
             const posY: f32 = @floatFromInt(y);
 
@@ -251,8 +279,14 @@ pub fn main(init: std.process.Init) !void {
     var pressure: Grid align(@alignOf(vec)) = @splat(@splat(0.0));
     const clock = std.Io.Clock.awake;
 
-    var useSimd = true;
-    var useNewAdvect = true;
+    const DrawMode = enum(i32) {
+        arrows = 0,
+        streamlines,
+        color,
+        arrowcolor,
+        streamlinecolor,
+    };
+    var drawMode: DrawMode = .streamlinecolor;
 
     while (!rl.windowShouldClose()) {
         const pos = rl.getMousePosition();
@@ -266,22 +300,10 @@ pub fn main(init: std.process.Init) !void {
         //----------------------------------------------------------------------------------
 
         const updateStart = clock.now(init.io);
-        // for (0..8) |_| {
+        // for (0..5) |_| {
         calcDiv(&div, &vel);
-        if (useSimd) {
-            for (0..400) |_| {
-                calcPressureSimd(@ptrCast(&pressure), @ptrCast(&div));
-            }
-        } else {
-            for (0..400) |_| {
-                calcPressure(&pressure, &div);
-            }
-        }
-        if (rl.isKeyPressed(.space)) {
-            useSimd = !useSimd;
-        }
-        if (rl.isKeyPressed(.a)) {
-            useNewAdvect = !useNewAdvect;
+        for (0..400) |_| {
+            calcPressure(@ptrCast(&pressure), @ptrCast(&div));
         }
         project(&vel, &pressure);
         advect(&vel);
@@ -296,24 +318,42 @@ pub fn main(init: std.process.Init) !void {
         const drawStart = clock.now(init.io);
 
         rl.clearBackground(.white);
-        // vel.drawArrows();
-        vel.drawStreamlines();
+        switch (drawMode) {
+            .arrows => {
+                vel.drawArrows();
+            },
+            .arrowcolor => {
+                vel.drawColor();
+                vel.drawArrows();
+            },
+            .color => {
+                vel.drawColor();
+            },
+            .streamlinecolor => {
+                vel.drawColor();
+                vel.drawStreamlines();
+            },
+            .streamlines => {
+                vel.drawStreamlines();
+            },
+        }
 
         const drawTime = drawStart.untilNow(init.io, clock);
 
-        rl.drawFPS(0, 0);
+        rl.drawFPS(10, 0);
         {
             var buf: [16]u8 = std.mem.zeroes([16]u8);
             var writer = std.Io.Writer.fixed(&buf);
             try updateTime.format(&writer);
-            rl.drawText(@ptrCast(&buf), 0, 20, 20, .red);
+            rl.drawText(@ptrCast(&buf), 10, 30, 20, .red);
         }
         {
             var buf: [16]u8 = std.mem.zeroes([16]u8);
             var writer = std.Io.Writer.fixed(&buf);
             try drawTime.format(&writer);
-            rl.drawText(@ptrCast(&buf), 0, 40, 20, .red);
+            rl.drawText(@ptrCast(&buf), 10, 60, 20, .red);
         }
+        _ = rg.comboBox(.init(10.0, 90.0, 150.0, 20.0), "Arrows;Streamlines;Color;Arrows and color;Streamlines and color", @ptrCast(&drawMode));
         //----------------------------------------------------------------------------------
     }
 }
