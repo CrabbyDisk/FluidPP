@@ -1,1 +1,1 @@
-load flake ~/shells/rust
+load flake ~/shells/zig
