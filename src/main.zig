@@ -3,8 +3,8 @@ const std = @import("std");
 const rl = @import("raylib");
 const rg = @import("raygui");
 
-const WIDTH = 96;
-const HEIGHT = 54;
+const WIDTH = 64;
+const HEIGHT = 36;
 
 const SCALE: f32 = 20.0;
 const DT: f32 = 1.0 / 75.0;
@@ -13,6 +13,10 @@ const vecLen = std.simd.suggestVectorLength(f32).?;
 const vec = @Vector(vecLen, f32);
 const GridSimd = [HEIGHT][@divExact(WIDTH, vecLen)]vec;
 const Grid = [HEIGHT][WIDTH]f32;
+
+const boolVec = @Vector(vecLen, bool);
+const WallGrid = [HEIGHT]std.bit_set.Array(u8, WIDTH);
+const WallGridSimd = [HEIGHT][@divExact(WIDTH, vecLen)]boolVec;
 
 fn calcDiv(div: *Grid, vel: *const MacGrid) void {
     for (div, 0..) |*row, y| {
@@ -26,19 +30,35 @@ fn calcDiv(div: *Grid, vel: *const MacGrid) void {
     }
 }
 
-fn calcPressure(pressure: *GridSimd, divergence: *const GridSimd) void {
+fn calcPressure(pressure: *GridSimd, divergence: *const GridSimd, walls: *const WallGridSimd) void {
     const old = pressure.*;
     for (pressure, 0..) |*row, y| {
-        for (row, 0..) |*chunk, xStart| {
-            const top = if (y == 0) old[y][xStart] else old[y - 1][xStart];
-            const btm = if (y == HEIGHT - 1) old[y][xStart] else old[y + 1][xStart];
+        for (row, 0..) |*chunk, x| {
+            const topWall: boolVec = if (y == 0) @splat(true) else walls[y - 1][x];
+            const topRow = if (y == 0) undefined else old[y - 1][x];
+            const top = @select(f32, topWall, old[y][x], topRow);
 
-            const prevLast = if (xStart == 0) old[y][xStart][0] else old[y][xStart - 1][vecLen - 1];
-            const left = std.simd.shiftElementsRight(old[y][xStart], 1, prevLast);
+            const btmWall: boolVec = if (y == HEIGHT - 1) @splat(true) else walls[y + 1][x];
+            const btmRow = if (y == HEIGHT - 1) undefined else old[y + 1][x];
+            const btm = @select(f32, btmWall, old[y][x], btmRow);
 
-            const nextFirst = if (xStart == WIDTH / vecLen - 1) old[y][xStart][vecLen - 1] else old[y][xStart + 1][0];
-            const right = std.simd.shiftElementsLeft(old[y][xStart], 1, nextFirst);
-            chunk.* = (top + btm + right + left - divergence[y][xStart]) / @as(vec, @splat(4.0));
+            const leftWall = if (x == 0)
+                std.simd.shiftElementsRight(walls[y][x], 1, true)
+            else
+                std.simd.shiftElementsRight(walls[y][x], 1, walls[y][x - 1][vecLen - 1]);
+            const prevLast = if (x == 0) old[y][x][0] else old[y][x - 1][vecLen - 1];
+            const leftRow = std.simd.shiftElementsRight(old[y][x], 1, prevLast);
+            const left = @select(f32, leftWall, old[y][x], leftRow);
+
+            const rightWall = if (x == WIDTH / vecLen - 1)
+                std.simd.shiftElementsLeft(walls[y][x], 1, true)
+            else
+                std.simd.shiftElementsLeft(walls[y][x], 1, walls[y][x + 1][0]);
+            const nextFirst = if (x == WIDTH / vecLen - 1) old[y][x][vecLen - 1] else old[y][x + 1][0];
+            const rightRow = std.simd.shiftElementsLeft(old[y][x], 1, nextFirst);
+            const right = @select(f32, rightWall, old[y][x], rightRow);
+
+            chunk.* = (top + btm + right + left - divergence[y][x]) / @as(vec, @splat(4.0));
         }
     }
 }
@@ -190,27 +210,21 @@ fn drawPressure(pressure: *const Grid) void {
     }
 }
 
-fn project(vel: *MacGrid, pressure: *const Grid) void {
+fn project(vel: *MacGrid, pressure: *const Grid, walls: *const WallGrid) void {
     for (&vel.gridX, 0..) |*row, y| {
         for (row, 0..) |*cell, x| {
-            if (x == 0 or x == WIDTH) {
-                cell.* = 0.0;
-            } else {
-                const left = pressure[y][x - 1];
-                const right = pressure[y][x];
-                cell.* -= right - left;
-            }
+            if (x == 0 or x == WIDTH or walls[y].isSet(x - 1) or walls[y].isSet(x)) continue;
+            const left = pressure[y][x - 1];
+            const right = pressure[y][x];
+            cell.* -= right - left;
         }
     }
     for (&vel.gridY, 0..) |*row, y| {
         for (row, 0..) |*cell, x| {
-            if (y == 0 or y == HEIGHT) {
-                cell.* = 0.0;
-            } else {
-                const top = pressure[y - 1][x];
-                const btm = pressure[y][x];
-                cell.* -= btm - top;
-            }
+            if (y == 0 or y == HEIGHT or walls[y - 1].isSet(x) or walls[y].isSet(x)) continue;
+            const top = pressure[y - 1][x];
+            const btm = pressure[y][x];
+            cell.* -= btm - top;
         }
     }
 }
@@ -219,7 +233,7 @@ fn advect(vel: *MacGrid) void {
     const old = vel.*;
     for (&vel.gridX, 0..) |*row, y| {
         for (row, 0..) |*cell, x| {
-            if (x == 0 or x == WIDTH) continue;
+            if (cell.* == 0 or x == 0 or x == WIDTH) continue;
 
             const posX: f32 = @floatFromInt(x);
             const posY: f32 = @floatFromInt(y);
@@ -241,7 +255,7 @@ fn advect(vel: *MacGrid) void {
 
     for (&vel.gridY, 0..) |*row, y| {
         for (row, 0..) |*cell, x| {
-            if (y == 0 or y == HEIGHT) continue;
+            if (cell.* == 0) continue;
 
             const posX: f32 = @floatFromInt(x);
             const posY: f32 = @floatFromInt(y);
@@ -277,7 +291,13 @@ pub fn main(init: std.process.Init) !void {
     var vel: MacGrid = .zeroes();
     var div: Grid align(@alignOf(vec)) = @splat(@splat(0.0));
     var pressure: Grid align(@alignOf(vec)) = @splat(@splat(0.0));
+    var wallGrid: WallGridSimd = @splat(@splat(@splat(false)));
+    const gridBitset: *WallGrid = @ptrCast(&wallGrid);
     const clock = std.Io.Clock.awake;
+    for (&vel.gridX) |*row| {
+        row[0] = 1.0;
+        row[WIDTH] = 1.0;
+    }
 
     const DrawMode = enum(i32) {
         arrows = 0,
@@ -296,18 +316,28 @@ pub fn main(init: std.process.Init) !void {
             cellX.* += delta.x / SCALE * 10.0;
             cellY.* += delta.y / SCALE * 10.0;
         }
+        if (rl.isMouseButtonDown(.right)) {
+            const x: usize = @round(pos.x / SCALE - 0.5);
+            const y: usize = @round(pos.y / SCALE - 0.5);
+            gridBitset[y].set(x);
+            vel.gridX[y][x] = 0;
+            vel.gridX[y][x + 1] = 0;
+            vel.gridY[y][x] = 0;
+            vel.gridY[y + 1][x] = 0;
+        }
         // Update
         //----------------------------------------------------------------------------------
 
         const updateStart = clock.now(init.io);
-        // for (0..5) |_| {
-        calcDiv(&div, &vel);
-        for (0..400) |_| {
-            calcPressure(@ptrCast(&pressure), @ptrCast(&div));
+        for (0..10) |_| {
+            calcDiv(&div, &vel);
+            for (0..100) |_| {
+                calcPressure(@ptrCast(&pressure), @ptrCast(&div), &wallGrid);
+            }
+            project(&vel, &pressure, gridBitset);
+            advect(&vel);
         }
-        project(&vel, &pressure);
-        advect(&vel);
-        // }
+        pressure = @splat(@splat(0.0));
         const updateTime = updateStart.untilNow(init.io, clock);
         //----------------------------------------------------------------------------------
 
@@ -336,6 +366,17 @@ pub fn main(init: std.process.Init) !void {
             .streamlines => {
                 vel.drawStreamlines();
             },
+        }
+        // drawPressure(&pressure);
+        for (gridBitset, 0..) |row, y| {
+            var iter = row.iterator(.{});
+            while (iter.next()) |x| {
+                rl.drawRectangleV(
+                    .{ .x = @as(f32, @floatFromInt(x)) * SCALE, .y = @as(f32, @floatFromInt(y)) * SCALE },
+                    .{ .x = SCALE, .y = SCALE },
+                    .black,
+                );
+            }
         }
 
         const drawTime = drawStart.untilNow(init.io, clock);
