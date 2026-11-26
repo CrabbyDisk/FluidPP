@@ -291,8 +291,7 @@ pub fn main(init: std.process.Init) !void {
     var vel: MacGrid = .zeroes();
     var div: Grid align(@alignOf(vec)) = @splat(@splat(0.0));
     var pressure: Grid align(@alignOf(vec)) = @splat(@splat(0.0));
-    var wallGrid: WallGridSimd = @splat(@splat(@splat(false)));
-    const gridBitset: *WallGrid = @ptrCast(&wallGrid);
+    var wallGrid: WallGrid = @splat(.empty);
     const clock = std.Io.Clock.awake;
     for (&vel.gridX) |*row| {
         row[0] = 1.0;
@@ -306,24 +305,40 @@ pub fn main(init: std.process.Init) !void {
         arrowcolor,
         streamlinecolor,
     };
+    const MouseMode = enum(i32) {
+        push = 0,
+        wall,
+    };
+    var mouseMode: MouseMode = .push;
     var drawMode: DrawMode = .streamlinecolor;
 
     while (!rl.windowShouldClose()) {
         const pos = rl.getMousePosition();
-        if (rl.isMouseButtonDown(.left)) {
-            const delta = rl.getMouseDelta();
-            const cellX, const cellY = vel.getCellPtrs(pos.x / SCALE, pos.y / SCALE);
-            cellX.* += delta.x / SCALE * 10.0;
-            cellY.* += delta.y / SCALE * 10.0;
-        }
-        if (rl.isMouseButtonDown(.right)) {
-            const x: usize = @round(pos.x / SCALE - 0.5);
-            const y: usize = @round(pos.y / SCALE - 0.5);
-            gridBitset[y].set(x);
-            vel.gridX[y][x] = 0;
-            vel.gridX[y][x + 1] = 0;
-            vel.gridY[y][x] = 0;
-            vel.gridY[y + 1][x] = 0;
+        switch (mouseMode) {
+            .push => {
+                if (rl.isMouseButtonDown(.left)) {
+                    const delta = rl.getMouseDelta();
+                    const cellX, const cellY = vel.getCellPtrs(pos.x / SCALE, pos.y / SCALE);
+                    cellX.* += delta.x / SCALE * 10.0;
+                    cellY.* += delta.y / SCALE * 10.0;
+                }
+            },
+            .wall => {
+                if (rl.isMouseButtonDown(.left)) {
+                    const x: usize = @round(pos.x / SCALE - 0.5);
+                    const y: usize = @round(pos.y / SCALE - 0.5);
+                    wallGrid[y].set(x);
+                    vel.gridX[y][x] = 0;
+                    vel.gridX[y][x + 1] = 0;
+                    vel.gridY[y][x] = 0;
+                    vel.gridY[y + 1][x] = 0;
+                }
+                if (rl.isMouseButtonDown(.right)) {
+                    const x: usize = @round(pos.x / SCALE - 0.5);
+                    const y: usize = @round(pos.y / SCALE - 0.5);
+                    wallGrid[y].unset(x);
+                }
+            },
         }
         // Update
         //----------------------------------------------------------------------------------
@@ -332,9 +347,9 @@ pub fn main(init: std.process.Init) !void {
         for (0..10) |_| {
             calcDiv(&div, &vel);
             for (0..100) |_| {
-                calcPressure(@ptrCast(&pressure), @ptrCast(&div), &wallGrid);
+                calcPressure(@ptrCast(&pressure), @ptrCast(&div), @ptrCast(&wallGrid));
             }
-            project(&vel, &pressure, gridBitset);
+            project(&vel, &pressure, &wallGrid);
             advect(&vel);
         }
         pressure = @splat(@splat(0.0));
@@ -368,7 +383,7 @@ pub fn main(init: std.process.Init) !void {
             },
         }
         // drawPressure(&pressure);
-        for (gridBitset, 0..) |row, y| {
+        for (wallGrid, 0..) |row, y| {
             var iter = row.iterator(.{});
             while (iter.next()) |x| {
                 rl.drawRectangleV(
@@ -395,6 +410,7 @@ pub fn main(init: std.process.Init) !void {
             rl.drawText(@ptrCast(&buf), 10, 60, 20, .red);
         }
         _ = rg.comboBox(.init(10.0, 90.0, 150.0, 20.0), "Arrows;Streamlines;Color;Arrows and color;Streamlines and color", @ptrCast(&drawMode));
+        _ = rg.comboBox(.init(10.0, 120.0, 150.0, 20.0), "Push fluid around;Place/remove walls", @ptrCast(&mouseMode));
         //----------------------------------------------------------------------------------
     }
 }
